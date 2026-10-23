@@ -1,0 +1,143 @@
+# shellcheck shell=sh
+# 10-meta.sh - help, `?`, completion. Everything here is generated from the
+# verb registry ($REG), which is generated from "# @verb" header blocks.
+# Registry columns: 1 verb 2 kind 3 domain 4 accepts 5 emits 6 opts 7 usage
+#                   8 summary 9 example 10 parser 11 needs
+
+REG=''
+DOMAIN_ORDER='session process network files logs config user search analyst'
+
+reg_load() { REG=$(_registry); }
+
+# reg_get VERB COL -> field (empty if verb unknown)
+reg_get() {
+	printf '%s\n' "$REG" | awk -F '\t' -v v="$1" -v c="$2" '$1==v{print $c; exit}'
+}
+reg_has() { [ -n "$(reg_get "$1" 1)" ]; }
+
+# reg_accepting TYPE -> verbs whose @accepts lists TYPE (or any)
+reg_accepting() {
+	printf '%s\n' "$REG" | awk -F '\t' -v t="$1" '{
+		n = split($4, a, /[ ,]+/)
+		for (i = 1; i <= n; i++) if (a[i] == t || a[i] == "any") { printf "%s ", $1; break }
+	}'
+}
+
+# @verb    help
+# @kind    builtin
+# @domain  session
+# @accepts verb
+# @usage   help [verb]
+# @summary List all verbs by domain, or show one verb's synopsis and types
+# @example help exe
+b_help() {
+	if [ $# -eq 0 ]; then
+		printf '%s\n' "$REG" | awk -F '\t' -v order="$DOMAIN_ORDER" '
+		{ d = ($3 == "" ? "other" : $3); L[d] = L[d] sprintf("  %-10s %s\n", $1, $8); seen[d] = 1 }
+		END {
+			n = split(order " other", o, " ")
+			for (i = 1; i <= n; i++) if (o[i] in seen && !(o[i] in done)) {
+				done[o[i]] = 1; print toupper(o[i]); printf "%s", L[o[i]]
+			}
+			print ""
+			print "Refs: N = item N of current list | S.N = step S item N | S.N.path/.user/.ip/.pid = entity"
+			print "      sN = whole step N | @REF = set the step parent explicitly"
+			print "help <verb> for details, ? for the current list, ? <ref> for one item."
+		}'
+		return 0
+	fi
+	if ! reg_has "$1"; then err "unknown verb: $1 (try help)"; return 1; fi
+	printf '%s\n' "$REG" | awk -F '\t' -v v="$1" '$1==v{
+		printf "%s - %s\n", $1, $8
+		printf "  usage:   %s\n", $7
+		printf "  accepts: %s\n  emits:   %s\n", $4, $5
+		if ($6 != "")  printf "  options: %s\n", $6
+		if ($11 != "") printf "  needs:   %s (reports unavailable if missing)\n", $11
+		n = split($9, e, / \| /); for (i = 1; i <= n; i++) printf "  example: %s\n", e[i]
+	}'
+}
+
+# @verb    ?
+# @kind    builtin
+# @domain  session
+# @accepts any
+# @usage   ? [ref]
+# @summary Legend for the current list, or type, valid verbs and entities of one ref
+# @example ? 1.6
+b_qmark() {
+	if [ $# -eq 0 ]; then
+		if [ -z "$CUR" ]; then msg "no current list yet - start with: ps"; return 0; fi
+		qm_types=$(awk -F '\t' '{print $2}' "$CASE/steps/$(pad4 "$CUR").items" | sort -u)
+		msg "current list: step $CUR ($(step_field "$CUR" 4) $(step_field "$CUR" 5))"
+		for qm_t in $qm_types; do
+			msg "  type $qm_t -> $(reg_accepting "$qm_t")"
+		done
+		msg "  ! = entity seen in an earlier step (convergence); [MAL]/[SUS]/[BEN] = marks"
+		return 0
+	fi
+	ref_resolve "$1" || return 1
+	msg "$R_ID  type=$R_TYPE  value=$R_VAL"
+	msg "  verbs: $(reg_accepting "$R_TYPE")"
+	if [ -n "$R_ENT" ]; then return 0; fi
+	item_line "$R_ID" | awk -F '\t' '{
+		for (i = 3; i <= NF; i++) {
+			if ($i ~ /^@/) { e = substr($i, 2); sub(/=/, " = ", e); E = E "    " e "\n" }
+			else if ($i !~ /^_/) { f = $i; sub(/=/, " = ", f); F = F "    " f "\n" }
+		}
+		printf "  fields:\n%s", F
+		printf "  entities:\n%s", (E == "" ? "    (none)\n" : E)
+	}'
+}
+
+cli_usage() {
+	cat <<EOF
+trail $TRAIL_VERSION - interactive pivot console for Linux host investigation
+Defensive / authorized use only. Read-only on the target.
+
+Usage:
+  trail --local [--case ID] [--out DIR] [--bin DIR] [--timeout S]
+  trail --ssh user@host [-J jump] [--case ID] [--out DIR] [--bin DIR] [--timeout S]
+  trail report --case DIR        regenerate reports + seal offline
+  trail --completion bash        print bash completion script
+  trail -h | --help | --version
+
+Modes:
+  --local        drop-and-run on the endpoint; case dir is written on this host
+  --ssh TARGET   remote; one ControlMaster socket for the session, keepalives,
+                 per-call timeout. Case dir stays on the analyst box.
+
+Flags:
+  --case ID      case id (default case-<host>-<UTC YYYYMMDDTHHMMZ>)
+  --out DIR      parent dir for the case dir (default: current dir)
+  --bin DIR      trusted static binaries on the TARGET, prepended to PATH
+  --timeout S    per-collector timeout in seconds (default 60)
+  --color WHEN   always | never | auto (default auto: on only at a TTY, and
+                 off when NO_COLOR is set). Color is console-only; reports and
+                 the case dir are always plain ASCII.
+  -J JUMP        ssh jump host
+
+Examples:
+  trail --ssh analyst@10.0.0.5 -J bastion --out ~/cases
+  trail --local --out /mnt/usb --bin /mnt/usb/bin
+  trail report --case ~/cases/case-web01-20261022T2100Z
+
+In the console: help, help <verb>, ?, ? <ref>.
+EOF
+}
+
+# Bash completion: verbs from the registry, options from @opts.
+cli_completion() {
+	cc_verbs=$(printf '%s\n' "$REG" | awk -F '\t' '{printf "%s ", $1}')
+	cat <<EOF
+# bash completion for trail (generated by trail --completion bash)
+_trail() {
+	local cur=\${COMP_WORDS[COMP_CWORD]}
+	COMPREPLY=( \$(compgen -W "--local --ssh -J --case --out --bin --timeout --color --help --version --completion report" -- "\$cur") )
+}
+complete -F _trail trail
+# console verbs (for rlwrap -f): $cc_verbs
+EOF
+}
+
+# rlwrap word list for in-console completion
+rl_words() { printf '%s\n' "$REG" | awk -F '\t' '{print $1; n = split($6, o, " "); for (i = 1; i <= n; i++) { sub(/:.*/, "", o[i]); print o[i] } }' | sort -u; }

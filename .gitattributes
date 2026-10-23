@@ -1,0 +1,6 @@
+* text=auto eol=lf
+*.sh text eol=lf
+*.awk text eol=lf
+build.sh text eol=lf
+dist/trail text eol=lf
+*.raw -text

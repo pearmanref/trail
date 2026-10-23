@@ -1,0 +1,4 @@
+# built bundle: committed on tagged releases only (git add -f dist/trail)
+dist/
+*.tmp
+case-*/

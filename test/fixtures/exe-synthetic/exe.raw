@@ -1,0 +1,7 @@
+#@bin /proc
+pid 1337
+target /tmp/.x/kworker (deleted)
+deleted 1
+md5 d41d8cd98f00b204e9800998ecf8427e
+sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+filetype ELF 64-bit LSB executable, x86-64
